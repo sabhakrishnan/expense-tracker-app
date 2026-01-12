@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Platform } from 'react-native';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
@@ -19,16 +19,30 @@ export interface AuthResult {
 // Google OAuth Client ID
 const WEB_CLIENT_ID = '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com';
 
+// Key to track if we've already processed the OAuth callback
+const OAUTH_PROCESSING_KEY = 'oauth_callback_processing';
+
 const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) => void }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingCallback, setIsProcessingCallback] = useState(false);
+  const hasProcessedCallback = useRef(false);
 
   // Handle OAuth callback on page load (for web) - run FIRST
   useEffect(() => {
     if (Platform.OS === 'web') {
+      // Prevent double processing
+      if (hasProcessedCallback.current) {
+        return;
+      }
+      
+      // Check if we're already processing (from sessionStorage)
+      const isAlreadyProcessing = sessionStorage.getItem(OAUTH_PROCESSING_KEY);
+      
       // Check URL hash for access token (implicit flow callback)
       const hash = window.location.hash;
-      if (hash && hash.includes('access_token')) {
+      if (hash && hash.includes('access_token') && !isAlreadyProcessing) {
+        hasProcessedCallback.current = true;
+        sessionStorage.setItem(OAUTH_PROCESSING_KEY, 'true');
         setIsProcessingCallback(true);
         setIsLoading(true);
         
@@ -37,7 +51,7 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
         
         if (accessToken) {
           // Clear the hash from URL immediately
-          window.history.replaceState(null, '', window.location.pathname);
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
           
           // Fetch user info
           fetch('https://www.googleapis.com/userinfo/v2/me', {
@@ -51,17 +65,26 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
             })
             .then(userInfo => {
               console.log('OAuth callback successful, user:', userInfo.email);
+              sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
               onLoginSuccess({ user: userInfo, accessToken });
             })
             .catch(err => {
               console.error('Error fetching user info:', err);
+              sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
               setIsLoading(false);
               setIsProcessingCallback(false);
+              hasProcessedCallback.current = false;
             });
         } else {
+          sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
           setIsLoading(false);
           setIsProcessingCallback(false);
+          hasProcessedCallback.current = false;
         }
+      } else if (isAlreadyProcessing) {
+        // We're in the middle of processing, show loading
+        setIsProcessingCallback(true);
+        setIsLoading(true);
       }
     }
   }, [onLoginSuccess]);

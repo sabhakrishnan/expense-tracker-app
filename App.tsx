@@ -1,12 +1,48 @@
 import React, { useEffect, useState } from 'react';
 import AppNavigator from './src/navigation/AppNavigator';
 import LoginScreen, { AuthResult } from './screens/LoginScreen';
-import { Platform, PermissionsAndroid, Alert } from 'react-native';
+import { Platform, PermissionsAndroid, Alert, View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { startSmsListener } from './src/services/SmsListener';
 import { GoogleDriveService } from './src/services/GoogleDriveService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const AUTH_STORAGE_KEY = '@expenses_app:auth_result';
 
 export default function App() {
   const [authResult, setAuthResult] = useState<AuthResult | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  // Check for persisted auth on app load
+  useEffect(() => {
+    async function checkPersistedAuth() {
+      try {
+        const stored = await AsyncStorage.getItem(AUTH_STORAGE_KEY);
+        if (stored) {
+          const parsedAuth = JSON.parse(stored) as AuthResult;
+          // Verify the token is still valid by making a test API call
+          const response = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${parsedAuth.accessToken}` },
+          });
+          
+          if (response.ok) {
+            const userInfo = await response.json();
+            // Update with fresh user info
+            setAuthResult({ ...parsedAuth, user: userInfo });
+          } else {
+            // Token expired, clear storage
+            await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
+          }
+        }
+      } catch (error) {
+        console.warn('Error checking persisted auth:', error);
+        await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    }
+    
+    checkPersistedAuth();
+  }, []);
 
   useEffect(() => {
     async function initAndroidSms() {
@@ -54,6 +90,13 @@ export default function App() {
   }, []);
 
   const handleLoginSuccess = async (result: AuthResult) => {
+    // Persist the auth result
+    try {
+      await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(result));
+    } catch (error) {
+      console.warn('Failed to persist auth result:', error);
+    }
+    
     setAuthResult(result);
     // Sync transactions with Google Drive on login (includes partner transactions if enabled)
     try {
@@ -66,6 +109,16 @@ export default function App() {
     }
   };
 
+  // Show loading while checking persisted auth
+  if (isCheckingAuth) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#6366F1" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
   if (!authResult) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
@@ -77,3 +130,17 @@ export default function App() {
     />
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#64748B',
+  },
+});
