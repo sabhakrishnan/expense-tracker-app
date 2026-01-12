@@ -1,7 +1,8 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Platform } from 'react-native';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
+import { makeRedirectUri } from 'expo-auth-session';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../src/theme';
@@ -15,17 +16,27 @@ export interface AuthResult {
   accessToken: string;
 }
 
+// Configure redirect URI for different platforms
+const redirectUri = makeRedirectUri({
+  scheme: 'expensetracker',
+  path: Platform.OS === 'web' ? '' : undefined,
+});
+
+// Log redirect URI for debugging (remove in production)
+console.log('Redirect URI:', redirectUri);
+
 const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) => void }) => {
   const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: 'YOUR_WEB_CLIENT_ID', // Replace with your Web client ID
+    clientId: '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com', // Web client ID
     iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com', // Replace with your iOS client ID
     androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com', // Replace with your Android client ID
-    webClientId: '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com', // Replace with your Web client ID
+    webClientId: '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com',
+    redirectUri: Platform.OS === 'web' ? 'https://sabhakrishnan.github.io/expense-tracker-app' : redirectUri,
     scopes: [
       'profile', 
       'email', 
       'https://www.googleapis.com/auth/drive.appdata',
-      'https://www.googleapis.com/auth/drive.file', // Required for sharing files with partners
+      'https://www.googleapis.com/auth/drive.file',
     ],
   });
 
