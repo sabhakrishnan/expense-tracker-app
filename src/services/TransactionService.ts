@@ -1,13 +1,13 @@
-import Papa from 'papaparse';
+import * as Papa from 'papaparse';
 import { Transaction } from '../models/Transaction';
 
 export const TransactionService = {
   async getTransactionsFromCSV(csvString: string): Promise<Transaction[]> {
-    return new Promise((resolve, reject) => {
+    return new Promise<Transaction[]>((resolve, reject) => {
       Papa.parse(csvString, {
         header: false, // The CSV does not have a consistent header row
         skipEmptyLines: true,
-        complete: (results) => {
+        complete: (results: Papa.ParseResult<string[]>) => {
           try {
             const transactions: Transaction[] = results.data
               .map((row: any, index: number) => {

@@ -1,8 +1,8 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Platform } from 'react-native';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
-import { makeRedirectUri } from 'expo-auth-session';
+import { makeRedirectUri, ResponseType } from 'expo-auth-session';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../src/theme';
@@ -16,22 +16,93 @@ export interface AuthResult {
   accessToken: string;
 }
 
-// Configure redirect URI for different platforms
-const redirectUri = makeRedirectUri({
-  scheme: 'expensetracker',
-  path: Platform.OS === 'web' ? '' : undefined,
-});
-
-// Log redirect URI for debugging (remove in production)
-console.log('Redirect URI:', redirectUri);
+// Google OAuth Client ID
+const WEB_CLIENT_ID = '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com';
 
 const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) => void }) => {
+  const [isLoading, setIsLoading] = useState(false);
+  const [isProcessingCallback, setIsProcessingCallback] = useState(false);
+
+  // Handle OAuth callback on page load (for web) - run FIRST
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      // Check URL hash for access token (implicit flow callback)
+      const hash = window.location.hash;
+      if (hash && hash.includes('access_token')) {
+        setIsProcessingCallback(true);
+        setIsLoading(true);
+        
+        const params = new URLSearchParams(hash.substring(1));
+        const accessToken = params.get('access_token');
+        
+        if (accessToken) {
+          // Clear the hash from URL immediately
+          window.history.replaceState(null, '', window.location.pathname);
+          
+          // Fetch user info
+          fetch('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          })
+            .then(res => {
+              if (!res.ok) {
+                throw new Error(`HTTP error! status: ${res.status}`);
+              }
+              return res.json();
+            })
+            .then(userInfo => {
+              console.log('OAuth callback successful, user:', userInfo.email);
+              onLoginSuccess({ user: userInfo, accessToken });
+            })
+            .catch(err => {
+              console.error('Error fetching user info:', err);
+              setIsLoading(false);
+              setIsProcessingCallback(false);
+            });
+        } else {
+          setIsLoading(false);
+          setIsProcessingCallback(false);
+        }
+      }
+    }
+  }, [onLoginSuccess]);
+
+  // For web, we'll use implicit grant flow
+  const handleGoogleSignIn = async () => {
+    if (Platform.OS === 'web') {
+      setIsLoading(true);
+      
+      // Use exact redirect URI that matches Google Console
+      const redirectUri = 'https://sabhakrishnan.github.io/expense-tracker-app/';
+      const scope = encodeURIComponent('profile email https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file');
+      
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+        `client_id=${WEB_CLIENT_ID}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+        `&response_type=token` +
+        `&scope=${scope}` +
+        `&include_granted_scopes=true` +
+        `&prompt=select_account`;
+      
+      // Redirect to Google OAuth
+      window.location.href = authUrl;
+      return;
+    }
+    
+    // For native platforms, use expo-auth-session
+    promptAsync();
+  };
+
+  // Configure redirect URI for native platforms
+  const redirectUri = makeRedirectUri({
+    scheme: 'expensetracker',
+  });
+
   const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com', // Web client ID
-    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com', // Replace with your iOS client ID
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com', // Replace with your Android client ID
-    webClientId: '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com',
-    redirectUri: Platform.OS === 'web' ? 'https://sabhakrishnan.github.io/expense-tracker-app' : redirectUri,
+    clientId: WEB_CLIENT_ID,
+    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+    webClientId: WEB_CLIENT_ID,
+    redirectUri: redirectUri,
     scopes: [
       'profile', 
       'email', 
@@ -55,6 +126,30 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
       getUserInfo();
     }
   }, [response]);
+
+  // Show loading screen while processing OAuth callback
+  if (isProcessingCallback) {
+    return (
+      <View style={styles.container}>
+        <LinearGradient
+          colors={Colors.gradientPrimary as [string, string]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradient}
+        >
+          <View style={styles.content}>
+            <View style={styles.logoContainer}>
+              <View style={styles.logoBackground}>
+                <Ionicons name="wallet" size={48} color={Colors.primary} />
+              </View>
+            </View>
+            <Text style={styles.title}>Expense Tracker</Text>
+            <Text style={styles.subtitle}>Signing you in...</Text>
+          </View>
+        </LinearGradient>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -101,16 +196,16 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
 
           {/* Login Button */}
           <TouchableOpacity
-            style={[styles.button, !request && styles.buttonDisabled]}
-            onPress={() => promptAsync()}
-            disabled={!request}
+            style={[styles.button, isLoading && styles.buttonDisabled]}
+            onPress={handleGoogleSignIn}
+            disabled={isLoading}
             activeOpacity={0.9}
           >
             <View style={styles.buttonContent}>
               <View style={styles.googleIconContainer}>
                 <Text style={styles.googleIcon}>G</Text>
               </View>
-              <Text style={styles.buttonText}>Continue with Google</Text>
+              <Text style={styles.buttonText}>{isLoading ? 'Signing in...' : 'Continue with Google'}</Text>
             </View>
           </TouchableOpacity>
 
