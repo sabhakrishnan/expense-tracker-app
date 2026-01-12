@@ -104,9 +104,8 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
       setErrorMessage(null);
       
       // Use the exact redirect URI that matches Google Cloud Console
-      // IMPORTANT: This must EXACTLY match what's configured in Google Cloud Console
-      // Including the trailing slash (or lack thereof)
-      const redirectUri = 'https://sabhakrishnan.github.io/expense-tracker-app';
+      // GitHub Pages always adds trailing slash, so we MUST use it
+      const redirectUri = 'https://sabhakrishnan.github.io/expense-tracker-app/';
       
       console.log('Using redirect URI:', redirectUri);
       
