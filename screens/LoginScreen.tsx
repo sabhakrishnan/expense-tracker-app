@@ -19,73 +19,81 @@ export interface AuthResult {
 // Google OAuth Client ID
 const WEB_CLIENT_ID = '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com';
 
-// Key to track if we've already processed the OAuth callback
+// Keys for OAuth state management
+const OAUTH_TOKEN_KEY = 'oauth_pending_token';
 const OAUTH_PROCESSING_KEY = 'oauth_callback_processing';
 
+// Capture OAuth token from URL hash immediately (before React renders)
+// This is crucial because the hash can be lost during page lifecycle
+const captureOAuthToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  
+  const hash = window.location.hash;
+  if (hash && hash.includes('access_token')) {
+    const params = new URLSearchParams(hash.substring(1));
+    const accessToken = params.get('access_token');
+    if (accessToken) {
+      // Store in sessionStorage immediately so it survives any page manipulations
+      sessionStorage.setItem(OAUTH_TOKEN_KEY, accessToken);
+      // Clear the hash from URL
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      return accessToken;
+    }
+  }
+  
+  // Check if we have a pending token from a previous capture
+  return sessionStorage.getItem(OAUTH_TOKEN_KEY);
+};
+
+// Capture token immediately when this module loads
+const pendingToken = captureOAuthToken();
+
 const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) => void }) => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [isProcessingCallback, setIsProcessingCallback] = useState(false);
+  const [isLoading, setIsLoading] = useState(!!pendingToken);
+  const [isProcessingCallback, setIsProcessingCallback] = useState(!!pendingToken);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const hasProcessedCallback = useRef(false);
 
-  // Handle OAuth callback on page load (for web) - run FIRST
+  // Handle OAuth callback on page load (for web)
   useEffect(() => {
-    if (Platform.OS === 'web') {
-      // Prevent double processing
-      if (hasProcessedCallback.current) {
-        return;
-      }
+    if (Platform.OS !== 'web') return;
+    if (hasProcessedCallback.current) return;
+    
+    const accessToken = pendingToken || sessionStorage.getItem(OAUTH_TOKEN_KEY);
+    
+    if (accessToken) {
+      hasProcessedCallback.current = true;
+      setIsProcessingCallback(true);
+      setIsLoading(true);
       
-      // Check if we're already processing (from sessionStorage)
-      const isAlreadyProcessing = sessionStorage.getItem(OAUTH_PROCESSING_KEY);
+      console.log('Processing OAuth token...');
       
-      // Check URL hash for access token (implicit flow callback)
-      const hash = window.location.hash;
-      if (hash && hash.includes('access_token') && !isAlreadyProcessing) {
-        hasProcessedCallback.current = true;
-        sessionStorage.setItem(OAUTH_PROCESSING_KEY, 'true');
-        setIsProcessingCallback(true);
-        setIsLoading(true);
-        
-        const params = new URLSearchParams(hash.substring(1));
-        const accessToken = params.get('access_token');
-        
-        if (accessToken) {
-          // Clear the hash from URL immediately
-          window.history.replaceState(null, '', window.location.pathname + window.location.search);
-          
-          // Fetch user info
-          fetch('https://www.googleapis.com/userinfo/v2/me', {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          })
-            .then(res => {
-              if (!res.ok) {
-                throw new Error(`HTTP error! status: ${res.status}`);
-              }
-              return res.json();
-            })
-            .then(userInfo => {
-              console.log('OAuth callback successful, user:', userInfo.email);
-              sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
-              onLoginSuccess({ user: userInfo, accessToken });
-            })
-            .catch(err => {
-              console.error('Error fetching user info:', err);
-              sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
-              setIsLoading(false);
-              setIsProcessingCallback(false);
-              hasProcessedCallback.current = false;
-            });
-        } else {
+      // Fetch user info
+      fetch('https://www.googleapis.com/userinfo/v2/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+        .then(res => {
+          if (!res.ok) {
+            throw new Error(`HTTP error! status: ${res.status}`);
+          }
+          return res.json();
+        })
+        .then(userInfo => {
+          console.log('OAuth callback successful, user:', userInfo.email);
+          // Clear the pending token
+          sessionStorage.removeItem(OAUTH_TOKEN_KEY);
           sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
+          onLoginSuccess({ user: userInfo, accessToken });
+        })
+        .catch(err => {
+          console.error('Error fetching user info:', err);
+          sessionStorage.removeItem(OAUTH_TOKEN_KEY);
+          sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
+          setErrorMessage('Failed to sign in. Please try again.');
           setIsLoading(false);
           setIsProcessingCallback(false);
           hasProcessedCallback.current = false;
-        }
-      } else if (isAlreadyProcessing) {
-        // We're in the middle of processing, show loading
-        setIsProcessingCallback(true);
-        setIsLoading(true);
-      }
+        });
     }
   }, [onLoginSuccess]);
 
@@ -93,9 +101,15 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
   const handleGoogleSignIn = async () => {
     if (Platform.OS === 'web') {
       setIsLoading(true);
+      setErrorMessage(null);
       
-      // Use exact redirect URI that matches Google Console
-      const redirectUri = 'https://sabhakrishnan.github.io/expense-tracker-app/';
+      // Detect the current base URL for the redirect
+      const currentUrl = window.location.href.split('#')[0].split('?')[0];
+      // Ensure it ends with /
+      const redirectUri = currentUrl.endsWith('/') ? currentUrl : currentUrl + '/';
+      
+      console.log('Using redirect URI:', redirectUri);
+      
       const scope = encodeURIComponent('profile email https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file');
       
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
@@ -200,6 +214,13 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
           <Text style={styles.subtitle}>
             Track, share, and manage your{'\n'}expenses effortlessly
           </Text>
+
+          {/* Error Message */}
+          {errorMessage && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{errorMessage}</Text>
+            </View>
+          )}
 
           {/* Features */}
           <View style={styles.featuresContainer}>
@@ -361,6 +382,18 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.6)',
     textAlign: 'center',
     marginTop: Spacing.xl,
+  },
+  errorContainer: {
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    marginBottom: Spacing.lg,
+  },
+  errorText: {
+    color: '#FEE2E2',
+    textAlign: 'center',
+    fontSize: 14,
   },
 });
 
