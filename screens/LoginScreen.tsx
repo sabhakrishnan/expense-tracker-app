@@ -103,10 +103,10 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) 
       setIsLoading(true);
       setErrorMessage(null);
       
-      // Detect the current base URL for the redirect
-      const currentUrl = window.location.href.split('#')[0].split('?')[0];
-      // Ensure it ends with /
-      const redirectUri = currentUrl.endsWith('/') ? currentUrl : currentUrl + '/';
+      // Use the exact redirect URI that matches Google Cloud Console
+      // IMPORTANT: This must EXACTLY match what's configured in Google Cloud Console
+      // Including the trailing slash (or lack thereof)
+      const redirectUri = 'https://sabhakrishnan.github.io/expense-tracker-app';
       
       console.log('Using redirect URI:', redirectUri);
       
