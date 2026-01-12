@@ -19,114 +19,145 @@ export interface AuthResult {
 // Google OAuth Client ID
 const WEB_CLIENT_ID = '817920016300-13a7jde06sr6ngupr8hdg8firigc5cuf.apps.googleusercontent.com';
 
-// Keys for OAuth state management
-const OAUTH_TOKEN_KEY = 'oauth_pending_token';
+// PKCE helpers and state keys for web OAuth
+const PKCE_VERIFIER_KEY = 'pkce_code_verifier';
 const OAUTH_PROCESSING_KEY = 'oauth_callback_processing';
 
-// Capture OAuth token from URL hash immediately (before React renders)
-// This is crucial because the hash can be lost during page lifecycle
-const captureOAuthToken = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  
-  const hash = window.location.hash;
-  if (hash && hash.includes('access_token')) {
-    const params = new URLSearchParams(hash.substring(1));
-    const accessToken = params.get('access_token');
-    if (accessToken) {
-      // Store in sessionStorage immediately so it survives any page manipulations
-      sessionStorage.setItem(OAUTH_TOKEN_KEY, accessToken);
-      // Clear the hash from URL
-      window.history.replaceState(null, '', window.location.pathname + window.location.search);
-      return accessToken;
-    }
+const base64UrlEncode = (arrayBuffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
   }
-  
-  // Check if we have a pending token from a previous capture
-  return sessionStorage.getItem(OAUTH_TOKEN_KEY);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 };
 
-// Capture token immediately when this module loads
-const pendingToken = captureOAuthToken();
+const sha256 = async (plain: string) => {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(plain);
+  const digest = await (window.crypto.subtle || (window as any).msCrypto.subtle).digest('SHA-256', data);
+  return digest;
+};
+
+const generateCodeVerifier = () => {
+  const array = new Uint8Array(128);
+  (window.crypto.getRandomValues as any)(array);
+  return base64UrlEncode(array.buffer);
+};
+
+const generateCodeChallenge = async (verifier: string) => {
+  const hashed = await sha256(verifier);
+  return base64UrlEncode(hashed);
+};
 
 const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (result: AuthResult) => void }) => {
-  const [isLoading, setIsLoading] = useState(!!pendingToken);
-  const [isProcessingCallback, setIsProcessingCallback] = useState(!!pendingToken);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isProcessingCallback, setIsProcessingCallback] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const hasProcessedCallback = useRef(false);
 
-  // Handle OAuth callback on page load (for web)
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    if (hasProcessedCallback.current) return;
-    
-    const accessToken = pendingToken || sessionStorage.getItem(OAUTH_TOKEN_KEY);
-    
-    if (accessToken) {
-      hasProcessedCallback.current = true;
-      setIsProcessingCallback(true);
-      setIsLoading(true);
-      
-      console.log('Processing OAuth token...');
-      
-      // Fetch user info
-      fetch('https://www.googleapis.com/userinfo/v2/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      })
-        .then(res => {
-          if (!res.ok) {
-            throw new Error(`HTTP error! status: ${res.status}`);
-          }
-          return res.json();
-        })
-        .then(userInfo => {
-          console.log('OAuth callback successful, user:', userInfo.email);
-          // Clear the pending token
-          sessionStorage.removeItem(OAUTH_TOKEN_KEY);
-          sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
-          onLoginSuccess({ user: userInfo, accessToken });
-        })
-        .catch(err => {
-          console.error('Error fetching user info:', err);
-          sessionStorage.removeItem(OAUTH_TOKEN_KEY);
-          sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
-          setErrorMessage('Failed to sign in. Please try again.');
-          setIsLoading(false);
-          setIsProcessingCallback(false);
-          hasProcessedCallback.current = false;
-        });
-    }
-  }, [onLoginSuccess]);
-
-  // For web, we'll use implicit grant flow
+  // For web, use Authorization Code + PKCE flow
   const handleGoogleSignIn = async () => {
     if (Platform.OS === 'web') {
       setIsLoading(true);
       setErrorMessage(null);
-      
-      // Use the exact redirect URI that matches Google Cloud Console
-      // GitHub Pages always adds trailing slash, so we MUST use it
+
       const redirectUri = 'https://sabhakrishnan.github.io/expense-tracker-app/';
-      
-      console.log('Using redirect URI:', redirectUri);
-      
-      const scope = encodeURIComponent('profile email https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file');
-      
+      const scope = encodeURIComponent('openid profile email https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file');
+
+      // generate PKCE values
+      const verifier = generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
+      sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+
+      const state = Math.random().toString(36).substring(2, 15);
+      sessionStorage.setItem(OAUTH_PROCESSING_KEY, state);
+
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
         `client_id=${WEB_CLIENT_ID}` +
         `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-        `&response_type=token` +
+        `&response_type=code` +
         `&scope=${scope}` +
-        `&include_granted_scopes=true` +
+        `&code_challenge=${encodeURIComponent(challenge)}` +
+        `&code_challenge_method=S256` +
+        `&state=${encodeURIComponent(state)}` +
         `&prompt=select_account`;
-      
-      // Redirect to Google OAuth
+
       window.location.href = authUrl;
       return;
     }
-    
+
     // For native platforms, use expo-auth-session
     promptAsync();
   };
+
+  // On web, check for code in URL and exchange it for tokens
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+
+    const storedState = sessionStorage.getItem(OAUTH_PROCESSING_KEY);
+    const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
+
+    if (code && state && storedState && state === storedState && verifier && !hasProcessedCallback.current) {
+      hasProcessedCallback.current = true;
+      // clear state from storage
+      sessionStorage.removeItem(OAUTH_PROCESSING_KEY);
+      setIsProcessingCallback(true);
+      setIsLoading(true);
+
+      const redirectUri = 'https://sabhakrishnan.github.io/expense-tracker-app/';
+
+      // Exchange code for token
+      (async () => {
+        try {
+          const body = new URLSearchParams();
+          body.append('code', code);
+          body.append('client_id', WEB_CLIENT_ID);
+          body.append('redirect_uri', redirectUri);
+          body.append('grant_type', 'authorization_code');
+          body.append('code_verifier', verifier);
+
+          const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body.toString(),
+          });
+
+          if (!tokenRes.ok) {
+            const errText = await tokenRes.text();
+            throw new Error('Token exchange failed: ' + errText);
+          }
+
+          const tokenData = await tokenRes.json();
+          const accessToken = tokenData.access_token;
+
+          // Fetch user info
+          const userRes = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (!userRes.ok) throw new Error('Failed fetching user info');
+          const userInfo = await userRes.json();
+
+          // cleanup URL (remove code/state)
+          const cleanUrl = window.location.origin + window.location.pathname + window.location.hash;
+          window.history.replaceState({}, document.title, cleanUrl);
+
+          sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+          onLoginSuccess({ user: userInfo, accessToken });
+        } catch (err: any) {
+          console.error(err);
+          setErrorMessage('Sign-in failed: ' + (err.message || err));
+          setIsLoading(false);
+          setIsProcessingCallback(false);
+          hasProcessedCallback.current = false;
+        }
+      })();
+    }
+  }, [onLoginSuccess]);
 
   // Configure redirect URI for native platforms
   const redirectUri = makeRedirectUri({
