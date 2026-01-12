@@ -8,14 +8,11 @@ const config = getDefaultConfig(__dirname);
 // Get the project root
 const projectRoot = __dirname;
 
-// Exclude large folders that don't need watching to reduce open file handles
-config.resolver.blacklistREs = [
-    /node_modules\/.*/,
-    /\.git\/.*/,
-    /ios\/.*/,
-    /android\/.*/,
-    /\.expo\/.*/,
-];
+// Add alias for react-native-svg to work on web
+config.resolver.extraNodeModules = {
+  ...config.resolver.extraNodeModules,
+  'react-native-svg/src': path.resolve(__dirname, 'node_modules/react-native-svg'),
+};
 
 // Only watch the project root and the src folder (if present)
 config.watchFolders = [

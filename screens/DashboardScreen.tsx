@@ -6,12 +6,11 @@ import {
   ScrollView, 
   Dimensions,
   TouchableOpacity,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
-import CircularProgress from 'react-native-circular-progress-indicator';
-import { LineChart, BarChart } from 'react-native-chart-kit';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../src/theme';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -21,36 +20,6 @@ const formatCurrency = (amount: number): string => {
   return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 };
 
-const formatCurrencyDecimal = (amount: number): string => {
-  return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-};
-
-// Modern chart configuration
-const modernChartConfig = {
-  backgroundGradientFrom: Colors.surface,
-  backgroundGradientTo: Colors.surface,
-  backgroundGradientFromOpacity: 0,
-  backgroundGradientToOpacity: 0,
-  color: (opacity = 1) => `rgba(99, 102, 241, ${opacity})`,
-  labelColor: (opacity = 1) => Colors.textSecondary,
-  strokeWidth: 3,
-  barPercentage: 0.6,
-  useShadowColorFromDataset: false,
-  decimalPlaces: 0,
-  propsForDots: {
-    r: '6',
-    strokeWidth: '2',
-    stroke: Colors.primary,
-  },
-  propsForBackgroundLines: {
-    strokeDasharray: '',
-    stroke: Colors.borderLight,
-    strokeWidth: 1,
-  },
-  fillShadowGradient: Colors.primary,
-  fillShadowGradientOpacity: 0.2,
-};
-
 interface BudgetGaugeProps {
   category: string;
   spent: number;
@@ -58,6 +27,7 @@ interface BudgetGaugeProps {
   icon: keyof typeof Ionicons.glyphMap;
 }
 
+// CSS-based circular progress (works on web)
 const BudgetGauge = ({ category, spent, budget, icon }: BudgetGaugeProps) => {
   const percentage = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
   const isOverBudget = spent > budget;
@@ -73,20 +43,22 @@ const BudgetGauge = ({ category, spent, budget, icon }: BudgetGaugeProps) => {
       <View style={styles.gaugeIconContainer}>
         <Ionicons name={icon} size={20} color={getColor()} />
       </View>
-      <CircularProgress
-        value={percentage}
-        radius={38}
-        duration={1200}
-        maxValue={100}
-        valueSuffix={'%'}
-        progressValueColor={Colors.text}
-        activeStrokeColor={getColor()}
-        inActiveStrokeColor={Colors.borderLight}
-        inActiveStrokeOpacity={1}
-        inActiveStrokeWidth={6}
-        activeStrokeWidth={6}
-        progressValueStyle={{ fontSize: 14, fontWeight: '700' }}
-      />
+      <View style={styles.circularProgress}>
+        <View style={[styles.circularBg, { borderColor: Colors.borderLight }]}>
+          <View 
+            style={[
+              styles.circularFill, 
+              { 
+                borderColor: getColor(),
+                transform: [{ rotate: `${(percentage / 100) * 360}deg` }],
+              }
+            ]} 
+          />
+          <View style={styles.circularInner}>
+            <Text style={styles.percentText}>{Math.round(percentage)}%</Text>
+          </View>
+        </View>
+      </View>
       <Text style={styles.gaugeCategory}>{category}</Text>
       <Text style={[styles.gaugeAmount, isOverBudget && styles.overBudget]}>
         {formatCurrency(spent)}
@@ -129,6 +101,27 @@ const StatCard = ({ title, amount, icon, trend, gradient }: StatCardProps) => (
     )}
   </LinearGradient>
 );
+
+// Simple bar component for charts
+interface SimpleBarProps {
+  label: string;
+  value: number;
+  maxValue: number;
+  color: string;
+}
+
+const SimpleBar = ({ label, value, maxValue, color }: SimpleBarProps) => {
+  const percentage = maxValue > 0 ? (value / maxValue) * 100 : 0;
+  return (
+    <View style={styles.barContainer}>
+      <Text style={styles.barLabel}>{label}</Text>
+      <View style={styles.barTrack}>
+        <View style={[styles.barFill, { width: `${percentage}%`, backgroundColor: color }]} />
+      </View>
+      <Text style={styles.barValue}>{formatCurrency(value)}</Text>
+    </View>
+  );
+};
 
 interface TopCategoryProps {
   item: { name: string; spent: number; icon: keyof typeof Ionicons.glyphMap };
@@ -176,25 +169,17 @@ const DashboardScreen = () => {
     { name: 'Bills', spent: 4500, budget: 5000, icon: 'flash-outline' as const },
   ];
 
-  const spendingTrendData = {
-    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-    datasets: [
-      {
-        data: [2800, 1500, 3200, 2100, 4500, 6200, 3800],
-        color: (opacity = 1) => `rgba(99, 102, 241, ${opacity})`,
-        strokeWidth: 3,
-      },
-    ],
-  };
+  const weeklyData = [
+    { label: 'Mon', value: 2800 },
+    { label: 'Tue', value: 1500 },
+    { label: 'Wed', value: 3200 },
+    { label: 'Thu', value: 2100 },
+    { label: 'Fri', value: 4500 },
+    { label: 'Sat', value: 6200 },
+    { label: 'Sun', value: 3800 },
+  ];
 
-  const incomeVsExpenseData = {
-    labels: ['Income', 'Expenses', 'Savings'],
-    datasets: [
-      {
-        data: [totalIncome, totalExpenses, savings],
-      },
-    ],
-  };
+  const maxWeekly = Math.max(...weeklyData.map(d => d.value));
 
   const topSpendingCategories = [...categories]
     .sort((a, b) => b.spent - a.spent)
@@ -281,34 +266,32 @@ const DashboardScreen = () => {
             ))}
           </ScrollView>
 
-          {/* Spending Trend Chart */}
+          {/* Spending Trend - Simple Bar Chart */}
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <View>
                 <Text style={styles.cardTitle}>Spending Trend</Text>
                 <Text style={styles.cardSubtitle}>Last 7 days</Text>
               </View>
-              <View style={styles.periodSelector}>
-                <Text style={styles.periodActive}>Week</Text>
-                <Text style={styles.periodInactive}>Month</Text>
-              </View>
             </View>
-            <LineChart
-              data={spendingTrendData}
-              width={screenWidth - 64}
-              height={200}
-              chartConfig={modernChartConfig}
-              bezier
-              style={styles.chart}
-              withHorizontalLines={true}
-              withVerticalLines={false}
-              withDots={true}
-              withShadow={true}
-              withInnerLines={true}
-              yAxisLabel="₹"
-              yAxisSuffix=""
-              fromZero
-            />
+            <View style={styles.simpleChart}>
+              {weeklyData.map((day, index) => (
+                <View key={day.label} style={styles.chartBarWrapper}>
+                  <View style={styles.chartBarContainer}>
+                    <View 
+                      style={[
+                        styles.chartBar, 
+                        { 
+                          height: `${(day.value / maxWeekly) * 100}%`,
+                          backgroundColor: index === 5 ? Colors.primary : Colors.primaryLight,
+                        }
+                      ]} 
+                    />
+                  </View>
+                  <Text style={styles.chartBarLabel}>{day.label}</Text>
+                </View>
+              ))}
+            </View>
           </View>
 
           {/* Top Spending Categories */}
@@ -329,7 +312,7 @@ const DashboardScreen = () => {
             ))}
           </View>
 
-          {/* Income vs. Expense Chart */}
+          {/* Monthly Overview */}
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <View>
@@ -337,24 +320,9 @@ const DashboardScreen = () => {
                 <Text style={styles.cardSubtitle}>Income vs Expenses</Text>
               </View>
             </View>
-            <BarChart
-              data={incomeVsExpenseData}
-              width={screenWidth - 64}
-              height={200}
-              yAxisLabel="₹"
-              yAxisSuffix=""
-              chartConfig={{
-                ...modernChartConfig,
-                color: (opacity = 1, index) => {
-                  const colors = [Colors.success, Colors.danger, Colors.primary];
-                  return colors[index ?? 0] || Colors.primary;
-                },
-              }}
-              style={styles.chart}
-              fromZero
-              showValuesOnTopOfBars
-              withInnerLines={false}
-            />
+            <SimpleBar label="Income" value={totalIncome} maxValue={totalIncome} color={Colors.success} />
+            <SimpleBar label="Expenses" value={totalExpenses} maxValue={totalIncome} color={Colors.danger} />
+            <SimpleBar label="Savings" value={savings} maxValue={totalIncome} color={Colors.primary} />
           </View>
 
           {/* Bottom spacing */}
@@ -415,7 +383,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.15)',
     borderRadius: BorderRadius.xl,
     padding: Spacing.xl,
-    backdropFilter: 'blur(10px)',
   },
   balanceLabel: {
     ...Typography.bodySmall,
@@ -516,6 +483,38 @@ const styles = StyleSheet.create({
     top: Spacing.sm,
     right: Spacing.sm,
   },
+  circularProgress: {
+    width: 76,
+    height: 76,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  circularBg: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  circularFill: {
+    position: 'absolute',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 6,
+    borderLeftColor: 'transparent',
+    borderBottomColor: 'transparent',
+  },
+  circularInner: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  percentText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.text,
+  },
   gaugeCategory: {
     ...Typography.caption,
     color: Colors.textSecondary,
@@ -551,30 +550,61 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     marginTop: 2,
   },
-  periodSelector: {
+  simpleChart: {
     flexDirection: 'row',
-    backgroundColor: Colors.surfaceVariant,
-    borderRadius: BorderRadius.sm,
-    padding: 4,
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    height: 150,
+    paddingTop: Spacing.md,
   },
-  periodActive: {
-    ...Typography.caption,
-    color: Colors.white,
-    backgroundColor: Colors.primary,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: BorderRadius.sm - 2,
+  chartBarWrapper: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  chartBarContainer: {
+    width: 24,
+    height: 120,
+    backgroundColor: Colors.borderLight,
+    borderRadius: 12,
+    justifyContent: 'flex-end',
     overflow: 'hidden',
   },
-  periodInactive: {
+  chartBar: {
+    width: '100%',
+    borderRadius: 12,
+  },
+  chartBarLabel: {
     ...Typography.caption,
     color: Colors.textSecondary,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    marginTop: Spacing.xs,
   },
-  chart: {
-    marginLeft: -16,
-    borderRadius: BorderRadius.md,
+  barContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+  },
+  barLabel: {
+    width: 70,
+    ...Typography.label,
+    color: Colors.textSecondary,
+  },
+  barTrack: {
+    flex: 1,
+    height: 12,
+    backgroundColor: Colors.borderLight,
+    borderRadius: 6,
+    marginHorizontal: Spacing.sm,
+    overflow: 'hidden',
+  },
+  barFill: {
+    height: '100%',
+    borderRadius: 6,
+  },
+  barValue: {
+    width: 80,
+    ...Typography.label,
+    color: Colors.text,
+    textAlign: 'right',
   },
   topCategoryItem: {
     flexDirection: 'row',
